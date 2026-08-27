@@ -1,10 +1,18 @@
 {repoDir, ...}: {
   # -- nx: flake/git lifecycle upkeep — up (which deploys), clean, push,
-  # doctor (= format + up + clean + push). Grouped together since
-  # doctor is mostly these composed (format lives in its own file —
+  # doctor (= format + update + deploy + clean + push). Grouped together
+  # since doctor is mostly these composed (format lives in its own file —
   # cmd-format.nix — since it's also a standalone command with its own
   # docs). nuke-history lives in its own file (cmd-nuke-history.nix) —
   # unlike these, it rewrites history and isn't something you run routinely.
+  #
+  # doctor deliberately does NOT call `nx up`: up only deploys when
+  # `nix flake update` actually changed flake.lock, so a doctor run whose
+  # only pending changes are elsewhere (e.g. packages.nix) would commit and
+  # push them but never build/switch. doctor instead updates inputs itself
+  # and always deploys exactly once afterward — deploy's own `git add -A`
+  # picks up both the flake.lock bump and any other pending changes in one
+  # commit/build/switch.
 
   programs.fish.functions = {
     # updates flake.lock, then deploys — unless the update left flake.lock
@@ -95,9 +103,10 @@
     '';
 
     __nx_cmd_doctor = ''
-      __nx_stage "Running full maintenance cycle (format, up, clean, push)"
+      __nx_stage "Running full maintenance cycle (format, update, deploy, clean, push)"
       nx format
-      and nx up
+      and nix flake update --flake ${repoDir}
+      and nx deploy
       and nx clean --keep 7
       and nx push
       and __nx_ok "Maintenance cycle complete"

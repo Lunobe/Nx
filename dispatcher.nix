@@ -149,8 +149,8 @@
       echo ""
       echo $sep
       echo ""
-      echo "  doctor        nx format, then nx up, then nx clean --keep 7, then nx push,"
-      echo "                in that order"
+      echo "  doctor        nx format, update flake inputs, nx deploy, then nx clean"
+      echo "                --keep 7, then nx push, in that order"
       echo ""
       echo $sep
       echo ""
@@ -186,7 +186,7 @@
       echo "  vm push|pull|log|del  manage ~/vmware backups on Cloudflare R2 (restic)"
       echo "  push          commit pending changes and push to the remote"
       echo "  nuke-history  squash all git history into one commit and force-push"
-      echo "  doctor        nx format, up, clean, push, in that order"
+      echo "  doctor        nx format, update flake inputs, deploy, clean, push, in that order"
       echo ""
       echo "Run 'nx --help' for details."
     '';
