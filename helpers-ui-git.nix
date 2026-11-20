@@ -10,11 +10,9 @@
       echo "$argv[1]"
     '';
 
-    # printed right after a stage's action finishes, so a step that
-    # produces no output of its own doesn't leave it unclear whether it
-    # actually ran — only call this once the action is known to have
-    # succeeded (after any status check for that step); takes an
-    # optional trailing note, e.g. __nx_ok "3 generations removed"
+    # printed after a stage's action succeeds, so a step with no output of
+    # its own doesn't leave it unclear whether it ran — call only after any
+    # status check; takes an optional note, e.g. __nx_ok "3 generations removed"
     __nx_ok = ''
       set_color -o green
       if test -n "$argv[1]"
@@ -45,6 +43,14 @@
       echo "$argv[1]"
     '';
 
+    # unresolved merge-conflict paths (git status --porcelain's XY codes for
+    # both-modified/both-added/etc) — checked before any auto-commit so
+    # conflict markers never get swept into history unnoticed
+    __nx_conflicted_files = ''
+      git -C ${repoDir} status --porcelain \
+        | string match -rg '^(?:UU|AA|DD|AU|UA|DU|UD) (.+)$'
+    '';
+
     __nx_diff_dirty = ''
       # -N stages new files by path only (no content), so they show up
       # in the diff below as additions instead of being invisible
@@ -55,6 +61,14 @@
     __nx_commit_if_dirty = ''
       set -l changes (git -C ${repoDir} status --porcelain)
       if test (count $changes) -gt 0
+        set -l conflicts (__nx_conflicted_files)
+        if test (count $conflicts) -gt 0
+          __nx_fail "Unresolved merge conflicts — resolve them before running this:"
+          for f in $conflicts
+            echo "  $f"
+          end
+          return 1
+        end
         __nx_stage "Changes to commit:"
         __nx_diff_dirty
         git -C ${repoDir} add -A
@@ -67,12 +81,19 @@
     __nx_commit_quiet = ''
       set -l changes (git -C ${repoDir} status --porcelain)
       if test (count $changes) -gt 0
+        set -l conflicts (__nx_conflicted_files)
+        if test (count $conflicts) -gt 0
+          __nx_fail "Unresolved merge conflicts — resolve them before running this:"
+          for f in $conflicts
+            echo "  $f"
+          end
+          return 1
+        end
         git -C ${repoDir} add -A
         git -C ${repoDir} commit -m "$argv[1]"
       end
     '';
 
-    # prompts "$argv[1] [y/N] "; returns 0 on y/yes (any case), 1 otherwise
     __nx_confirm = ''
       echo ""
       read -l -P "$argv[1] [y/N] " confirm
@@ -85,14 +106,21 @@
     '';
 
     # if there are pending changes: shows the diff, asks "$argv[1] [y/N] ",
-    # and on yes commits with message "$argv[2]" — used by up/push, which
-    # (unlike deploy) commit immediately with no build step in between;
-    # returns 1 (and prints "Aborted.") only when declined, not when there
-    # was simply nothing to commit
+    # commits as "$argv[2]" on yes — used by up/push, which (unlike deploy)
+    # commit immediately with no build step. Returns 1 only when declined,
+    # not when there was simply nothing to commit
     __nx_confirm_and_commit = ''
       set -l changes (git -C ${repoDir} status --porcelain)
       if test (count $changes) -eq 0
         return 0
+      end
+      set -l conflicts (__nx_conflicted_files)
+      if test (count $conflicts) -gt 0
+        __nx_fail "Unresolved merge conflicts — resolve them before running this:"
+        for f in $conflicts
+          echo "  $f"
+        end
+        return 1
       end
       __nx_stage "Changes to commit:"
       __nx_diff_dirty

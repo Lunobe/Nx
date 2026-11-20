@@ -9,6 +9,9 @@
     __nx_cmd_format = ''
       __nx_stage "Sorting modules/packages.nix"
       __nx_sort_packages
+      if test $status -ne 0
+        return 1
+      end
       __nx_ok
 
       __nx_stage "Formatting .nix files"

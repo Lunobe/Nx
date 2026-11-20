@@ -38,7 +38,11 @@
       # cd into secrets/ — agenix looks up recipients in secrets.nix by
       # the exact string passed to -e, which must match a relative key
       pushd ${repoDir}/secrets
-      sudo EDITOR=$EDITOR nix run github:ryantm/agenix -- -e $name.age -i $identity
+      # agenix isn't a nixpkgs package (ragenix is a different, Rust
+      # reimplementation) — relies on the real one already being on $PATH
+      # via environment.systemPackages in /etc/nixos/flake.nix, instead of
+      # fetching github:ryantm/agenix fresh every time
+      sudo EDITOR=$EDITOR agenix -e $name.age -i $identity
       set -l edit_status $status
       popd
       if test $edit_status -eq 0

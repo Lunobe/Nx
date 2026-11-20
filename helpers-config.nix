@@ -7,12 +7,10 @@
 
   programs.fish.functions = {
     __nx_config_files = ''
-      # walk the import graph starting at flake.nix, following relative-path
-      # references, so new modules are picked up automatically. a reference
-      # may be a .nix file directly, or a bare directory (e.g. "./nx", the
-      # nix equivalent of "./nx/default.nix") — resolved below. references
-      # that are neither (e.g. "./secrets/foo.age", a fish alias like
-      # "../..") are silently skipped
+      # walks the import graph from flake.nix via relative-path references,
+      # so new modules are picked up automatically. a reference may be a
+      # .nix file or a bare directory (resolved to its default.nix);
+      # anything else (a secret path, a fish alias like "../..") is skipped
       set -l root ${repoDir}
       set -l seen $root/flake.nix
       set -l queue $root/flake.nix
@@ -62,7 +60,10 @@
     __nx_sort_packages = ''
       set -l file ${repoDir}/modules/packages.nix
       set -l bounds (__nx_packages_bounds)
-      or return 0
+      or begin
+        __nx_fail "Could not find the 'home.packages = with pkgs; [ ... ];' block in modules/packages.nix — has its format changed?"
+        return 1
+      end
       set -l items_start (math $bounds[1] + 1)
       set -l items_end (math $bounds[2] - 1)
       set -l tmp (mktemp)
@@ -81,18 +82,20 @@
     __nx_list_packages = ''
       set -l file ${repoDir}/modules/packages.nix
       set -l bounds (__nx_packages_bounds)
-      or return 0
+      or begin
+        __nx_fail "Could not find the 'home.packages = with pkgs; [ ... ];' block in modules/packages.nix — has its format changed?"
+        return 1
+      end
       set -l items_start (math $bounds[1] + 1)
       set -l items_end (math $bounds[2] - 1)
       sed -n "$items_start,$items_end p" $file | string trim
     '';
 
     __nx_list_secrets = ''
-      # from secrets.nix's keys, not a directory listing — secrets/identity.txt.age
-      # is the root identity (encrypted with a passphrase, no secrets.nix entry),
-      # not a secret manageable this way, so it's correctly excluded.
-      # comments are stripped first — the file's own header comment shows
-      # a "name.age".publicKeys = [...] example that would otherwise match too
+      # from secrets.nix's keys, not a directory listing — this correctly
+      # excludes identity.txt.age (the root identity, has no secrets.nix
+      # entry). comments are stripped first since the file's own header
+      # comment shows an example key that would otherwise match too
       sed -E 's/#.*$//' ${repoDir}/secrets/secrets.nix 2>/dev/null \
         | grep -oE '"[^"]+\.age"' \
         | tr -d '"' | sed 's/\.age$//' | sort -u

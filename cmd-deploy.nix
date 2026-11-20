@@ -9,8 +9,8 @@
   programs.fish.functions = {
     __nx_cmd_deploy = ''
       __nx_stage "Checking for local changes"
-      # stage only (no commit yet) — needed so Nix can see new/changed
-      # files while building; the commit itself waits until confirmed
+      # staged, not committed yet — Nix needs to see new/changed files while
+      # building, but the commit waits until confirmed
       git -C ${repoDir} add -A
       __nx_ok
       set -l proceed yes
@@ -27,10 +27,9 @@
 
       switch "$proceed"
         case yes
-          # commit now, so the tree is clean for nix flake check/build
-          # (avoids a spurious "Git tree is dirty" warning) — but if
-          # either fails, roll the commit back with __nx_rollback_commit
-          # so a broken config never lingers in history
+          # commit now so the tree is clean for flake check/build (avoids a
+          # spurious "dirty" warning) — rolled back on failure below so a
+          # broken config never lingers in history
           set -l pre_check_head (git -C ${repoDir} rev-parse HEAD)
           __nx_commit_quiet "nx: auto-commit before deploy"
 
@@ -46,10 +45,9 @@
           __nx_stage "Building the new configuration"
           set -l build_dir (mktemp -d)
           pushd $build_dir
-          # &| (not |&, that's bash/zsh) sends stderr into the pipe too, so
-          # nom sees the full build log; $pipestatus[1] is nixos-rebuild's
-          # own exit code — $status after a pipe would be nom's instead,
-          # which could mask a real build failure as success
+          # &| (not bash/zsh's |&) pipes stderr too, so nom sees the full
+          # log; $pipestatus[1] is nixos-rebuild's exit code — plain $status
+          # would be nom's, masking a real build failure as success
           nixos-rebuild build --flake ${repoDir}#${hostName} &| ${pkgs.nix-output-monitor}/bin/nom
           set -l build_status $pipestatus[1]
           popd

@@ -1,26 +1,21 @@
 {repoDir, ...}: {
   # -- nx: flake/git lifecycle upkeep — up (which deploys), clean, push,
-  # doctor (= format + update + deploy + clean + push). Grouped together
-  # since doctor is mostly these composed (format lives in its own file —
-  # cmd-format.nix — since it's also a standalone command with its own
-  # docs). nuke-history lives in its own file (cmd-nuke-history.nix) —
-  # unlike these, it rewrites history and isn't something you run routinely.
+  # doctor (= format + update + deploy + clean + push). format and
+  # nuke-history live in their own files — format is also a standalone
+  # command, nuke-history rewrites history and isn't run routinely.
   #
-  # doctor deliberately does NOT call `nx up`: up only deploys when
-  # `nix flake update` actually changed flake.lock, so a doctor run whose
-  # only pending changes are elsewhere (e.g. packages.nix) would commit and
-  # push them but never build/switch. doctor instead updates inputs itself
-  # and always deploys exactly once afterward — deploy's own `git add -A`
-  # picks up both the flake.lock bump and any other pending changes in one
-  # commit/build/switch.
+  # doctor doesn't call `nx up`: up only deploys when flake.lock actually
+  # changed, so a doctor run with pending changes elsewhere (e.g.
+  # packages.nix) would commit and push them but never build/switch.
+  # doctor updates inputs itself and always deploys once — deploy's own
+  # `git add -A` picks up the flake.lock bump and everything else together.
 
   programs.fish.functions = {
-    # updates flake.lock, then deploys — unless the update left flake.lock
-    # unchanged, in which case there's nothing new to build and deploy is
-    # skipped; run nx up whenever you want the latest inputs built and
-    # switched in
+    # updates flake.lock, then deploys — skipped if the update left
+    # flake.lock unchanged, since there's nothing new to build
     __nx_cmd_up = ''
       __nx_stage "Checking for local changes"
+      set -l pre_check_head (git -C ${repoDir} rev-parse HEAD)
       __nx_confirm_and_commit "Commit these and update flake inputs?" "nx: auto-commit before update"
       or return 1
       __nx_ok
@@ -28,6 +23,7 @@
       __nx_stage "Updating flake inputs"
       nix flake update --flake ${repoDir}
       if test $status -ne 0
+        __nx_rollback_commit $pre_check_head
         __nx_fail "Updating flake inputs failed — likely no network access or an input source is unreachable."
         return 1
       end
@@ -64,12 +60,19 @@
         return 1
       end
       if test "$all" = no
-        # no flags at all — default to --keep 7
         if test -z "$keep"
           set keep 7
         end
         if not string match -qr '^[0-9]+$' -- "$keep"
           __nx_fail "--keep expects a whole number of days, got '$keep'."
+          return 1
+        end
+      end
+
+      if test "$all" = yes
+        __nx_confirm "This permanently deletes ALL old generations — you will not be able to roll back past the current one. Continue?"
+        or begin
+          echo "Aborted."
           return 1
         end
       end

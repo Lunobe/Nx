@@ -3,10 +3,9 @@
   hostName,
   ...
 }: {
-  # -- nx: nuke-history — kept separate from cmd-maintenance.nix since this
-  # is the one truly destructive operation in the whole tool; everything
-  # else in that file is safe, routine, and confirm-gated the same way but
-  # never rewrites history.
+  # -- nx: nuke-history — kept separate from cmd-maintenance.nix as the one
+  # truly destructive operation in the tool; everything else there is
+  # confirm-gated the same way but never rewrites history.
 
   programs.fish.functions = {
     __nx_cmd_nuke_history = ''
@@ -16,6 +15,17 @@
       echo "which is then force-pushed, overwriting the remote history too."
       echo "A full backup of the current history is saved locally first (see"
       echo "below), but restoring from it is a manual process, not an undo button."
+
+      set -l remotes (git -C ${repoDir} remote)
+      if test (count $remotes) -eq 0
+        __nx_fail "No git remote configured — nothing to force-push to."
+        return 1
+      end
+      set -l remote $remotes[1]
+      if test (count $remotes) -gt 1
+        __nx_warn "Multiple remotes configured ($remotes) — will force-push to '$remote'."
+      end
+      echo "Remote: $remote ("(git -C ${repoDir} remote get-url $remote)")"
 
       set -l changes (git -C ${repoDir} status --porcelain)
       if test (count $changes) -gt 0
@@ -36,10 +46,9 @@
       switch "$confirm"
         case NUKE
           __nx_stage "Backing up current history"
-          # .git-backups/ is gitignored, so it's never tracked, never
-          # committed, and never swept into the new squashed history by
-          # the git add -A below — safe to keep right inside the repo
-          set -l backup_dir ${repoDir}/.git-backups
+          # kept outside repoDir entirely (not just gitignored) so it
+          # survives even if the repo directory itself is later removed
+          set -l backup_dir $HOME/.nx-backups/nuke-history
           mkdir -p $backup_dir
           set -l backup_file $backup_dir/${hostName}-(date +%Y%m%d-%H%M%S).bundle
           # --all bundles every ref (branches + tags), not just the current
@@ -54,7 +63,6 @@
 
           __nx_stage "Squashing history into a single commit"
           set -l branch (git -C ${repoDir} branch --show-current)
-          set -l remote (git -C ${repoDir} remote | head -n1)
           git -C ${repoDir} checkout --orphan __nx_nuke_tmp
           and __nx_untrack_ignored
           and git -C ${repoDir} add -A
