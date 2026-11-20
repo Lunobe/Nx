@@ -1,16 +1,6 @@
-{
-  pkgs,
-  lib,
-  config,
-  ...
-}: let
-  labDomains = config.nx.vm.libvirtDomains;
-  swtpmDir = "/var/lib/libvirt/swtpm";
-  sudoKeepEnv = "AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION,RESTIC_REPOSITORY,RESTIC_PASSWORD_FILE";
-in {
+{pkgs, ...}: {
   # -- nx: vm — push/pull/log/del the ~/vmware VM library on Cloudflare R2
-  # via restic. With nx.vm.libvirtDomains set, the same restic snapshot also
-  # holds those libvirt VMs (disks, NVRAM, TPM state, snapshot metadata). Kept separate — unlike everything else nx touches, this
+  # via restic. Kept separate — unlike everything else nx touches, this
   # doesn't read/write the flake repo, just moves data between ~/vmware
   # and R2 using the r2Credentials/resticPassword agenix secrets.
   #
@@ -47,103 +37,10 @@ in {
       return 1
     '';
 
-    __nx_vm_virsh = ''
-      ${pkgs.libvirt}/bin/virsh -c qemu:///system $argv
-    '';
-
-    __nx_vm_lab_domains = ''
-${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}    '';
-
-    # true when this host has lab domains configured and libvirt answers
-    __nx_vm_lab_enabled = ''
-      test (count (__nx_vm_lab_domains)) -gt 0
-      and __nx_vm_virsh version >/dev/null 2>&1
-    '';
-
-    # every lab domain must be shut off (an iGPU-passthrough VM needs a clean
-    # stop, and a disk image copied while running is not consistent) and defined
-    __nx_vm_lab_check = ''
-      for d in (__nx_vm_lab_domains)
-        # virsh prints a blank line after the state, so take only the non-blank line
-        set -l state (__nx_vm_virsh domstate $d 2>/dev/null | string match -r '\S.*' | string trim)
-        if test -z "$state"
-          echo "$d is not defined in libvirt — apply the NixOS config that defines it first." >&2
-          return 1
-        end
-        if test "$state" != "shut off"
-          echo "$d is $state — shut it down first." >&2
-          return 1
-        end
-      end
-    '';
-
-    # paths the lab owns, read from the domain definitions: disks, NVRAM, swtpm
-    # state, and the snapshot-metadata dump (written by __nx_vm_lab_dump)
-    __nx_vm_lab_paths = ''
-      for d in (__nx_vm_lab_domains)
-        __nx_vm_virsh domblklist $d --details 2>/dev/null | string match -rg '^\s*\S+\s+disk\s+\S+\s+(/\S+)'
-        __nx_vm_virsh dumpxml --inactive $d 2>/dev/null | string match -rg '<nvram[^>]*>([^<]+)</nvram>'
-        if __nx_vm_virsh dumpxml --inactive $d 2>/dev/null | string match -q '*<tpm *'
-          echo ${swtpmDir}/(__nx_vm_virsh domuuid $d | string match -r '\S+')
-        end
-      end
-      echo $HOME/.nx-vm-libvirt-snapshots
-    '';
-
-    # libvirt keeps snapshot metadata outside the qcow2, so it is dumped to a
-    # plain directory that travels in the backup
-    __nx_vm_lab_dump = ''
-      set -l dump $HOME/.nx-vm-libvirt-snapshots
-      rm -rf $dump
-      mkdir -p $dump
-      for d in (__nx_vm_lab_domains)
-        mkdir -p $dump/$d
-        for s in (__nx_vm_virsh snapshot-list $d --name 2>/dev/null)
-          test -n "$s"
-          and __nx_vm_virsh snapshot-dumpxml $d $s > $dump/$d/$s.xml
-        end
-        __nx_vm_virsh snapshot-current $d --name > $dump/$d/CURRENT 2>/dev/null
-      end
-    '';
-
-    # restores the lab part of one restic snapshot ($argv[1], or "latest") into
-    # the paths from the domain definitions; needs the R2/restic environment
-    # exported by the caller
-    __nx_vm_lab_restore = ''
-      set -l sel $argv[1]
-      set -l selector
-      if test "$sel" = latest
-        set selector --host vm-library --tag vm
-      end
-      set -l dump $HOME/.nx-vm-libvirt-snapshots
-      set -l probe (${pkgs.restic}/bin/restic ls $selector $sel $dump 2>/dev/null | string match '/*')
-      if test (count $probe) -eq 0
-        echo "This backup has no malware-lab data (made before the lab joined nx vm) — skipping the lab part."
-        return 0
-      end
-      set -l includes
-      for p in (__nx_vm_lab_paths)
-        set -a includes --include $p
-      end
-      sudo --preserve-env=${sudoKeepEnv} ${pkgs.restic}/bin/restic restore $selector $sel --target / --sparse $includes
-      or return 1
-      for d in (__nx_vm_lab_domains)
-        for x in $dump/$d/*.xml
-          test -e $x
-          or continue
-          __nx_vm_virsh snapshot-create $d $x --redefine >/dev/null
-          or return 1
-        end
-        set -l cur (string match -r '\S+' < $dump/$d/CURRENT 2>/dev/null)
-        test -n "$cur"
-        and __nx_vm_virsh snapshot-current $d --snapshotname $cur >/dev/null
-      end
-    '';
-
     __nx_cmd_vm = ''
       switch "$argv[2]"
         case push
-          __nx_cmd_vm_push $argv
+          __nx_cmd_vm_push
         case pull
           __nx_cmd_vm_pull $argv
         case log
@@ -151,7 +48,7 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
         case del
           __nx_cmd_vm_del $argv
         case '*'
-          echo "Usage: nx vm push [--no-lab] | nx vm pull [id] [--no-lab] | nx vm log | nx vm del <id>"
+          echo "Usage: nx vm push | nx vm pull [id] | nx vm log | nx vm del <id>"
           return 1
       end
     '';
@@ -159,11 +56,6 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
     __nx_cmd_vm_push = ''
       set -l vmware_dir $HOME/vmware
       set -l snapshot_dir $HOME/.nx-vm-snapshot
-      set -l with_lab true
-      contains -- --no-lab $argv
-      and set with_lab false
-      __nx_vm_lab_enabled
-      or set with_lab false
 
       __nx_stage "Checking ~/vmware is a btrfs subvolume"
       # needs sudo — querying subvolume info is a privileged btrfs ioctl,
@@ -204,23 +96,6 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
       end
       __nx_ok
 
-      set -l lab_paths
-      if test $with_lab = true
-        __nx_stage "Preparing the malware-lab VMs (both must be shut off)"
-        __nx_vm_lab_check
-        if test $status -ne 0
-          __nx_fail "A malware-lab VM is running or not defined (see above) — shut it down, or push only ~/vmware with 'nx vm push --no-lab'."
-          return 1
-        end
-        __nx_vm_lab_dump
-        # root-owned files can only be tested with sudo; anything the definitions name but is missing is skipped
-        for p in (__nx_vm_lab_paths)
-          sudo test -e $p
-          and set -a lab_paths $p
-        end
-        __nx_ok (count $lab_paths)" lab paths added to the backup"
-      end
-
       if test -e $snapshot_dir
         __nx_warn "Leftover snapshot at $snapshot_dir from a previous run — removing it first."
         sudo btrfs subvolume delete $snapshot_dir
@@ -235,12 +110,7 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
       __nx_ok
 
       __nx_stage "Backing up to R2 (only changed data is uploaded after the first run)"
-      if test (count $lab_paths) -gt 0
-        # the lab files are root-owned, so restic runs as root with the R2 environment kept
-        sudo --preserve-env=${sudoKeepEnv} ${pkgs.restic}/bin/restic backup $snapshot_dir $lab_paths --host vm-library --tag vm --tag qemu
-      else
-        ${pkgs.restic}/bin/restic backup $snapshot_dir --host vm-library --tag vm
-      end
+      ${pkgs.restic}/bin/restic backup $snapshot_dir --host vm-library --tag vm
       set -l backup_status $status
       if test $backup_status -eq 0
         __nx_ok
@@ -264,15 +134,9 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
       set -l vmware_dir $HOME/vmware
       set -l snapshot_dir $HOME/.nx-vm-snapshot
       set -l target_snapshot latest
-      set -l ids (string match -v -- '--*' $argv)
-      if test -n "$ids[3]"
-        set target_snapshot "$ids[3]"
+      if test -n "$argv[3]"
+        set target_snapshot "$argv[3]"
       end
-      set -l with_lab true
-      contains -- --no-lab $argv
-      and set with_lab false
-      __nx_vm_lab_enabled
-      or set with_lab false
 
       set -l cred_file /run/agenix/r2Credentials
       set -l pw_file /run/agenix/resticPassword
@@ -304,22 +168,6 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
       # best-effort cleanup of a stale lock left by a previously killed
       # push/pull — restic unlock is a no-op if there's nothing to unlock
       ${pkgs.restic}/bin/restic unlock >/dev/null 2>&1
-
-      if test $with_lab = true
-        __nx_stage "Checking the malware-lab VMs are shut off"
-        __nx_vm_lab_check
-        if test $status -ne 0
-          __nx_fail "A malware-lab VM is running or not defined (see above) — shut it down, or restore only ~/vmware with 'nx vm pull --no-lab'."
-          return 1
-        end
-        __nx_ok
-        __nx_warn "If the backup holds malware-lab data, the VM disks, UEFI NVRAM and TPM state on this machine are overwritten by it."
-        __nx_confirm "Continue?"
-        or begin
-          echo "Aborted."
-          return 1
-        end
-      end
 
       set -l pull_backup_dir $HOME/.nx-vm-pull-snapshot
       if test -e $pull_backup_dir
@@ -356,16 +204,6 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
         return 1
       end
       __nx_ok
-
-      if test $with_lab = true
-        __nx_stage "Restoring the malware-lab VMs from $target_snapshot (disks, NVRAM, TPM, snapshots)"
-        __nx_vm_lab_restore $target_snapshot
-        if test $status -ne 0
-          __nx_fail "~/vmware is restored, but the lab restore failed (see restic's output above) — fix the cause and rerun 'nx vm pull $target_snapshot'."
-          return 1
-        end
-        __nx_ok
-      end
     '';
 
     __nx_cmd_vm_log = ''
@@ -388,7 +226,7 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
       set -lx RESTIC_REPOSITORY "s3:$r2_endpoint/$r2_bucket"
       set -lx RESTIC_PASSWORD_FILE $pw_file
 
-      __nx_stage "Backup history in R2 (each entry: ~/vmware, plus the malware-lab VMs when tagged qemu)"
+      __nx_stage "Backup history for ~/vmware in R2"
       set -l log_output (${pkgs.restic}/bin/restic snapshots --host vm-library --tag vm 2>&1)
       set -l log_status $status
       # restic's own exit code for "repository does not exist yet" — the

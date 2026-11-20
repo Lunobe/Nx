@@ -2,7 +2,6 @@
   imports = [
     ./helpers-ui-git.nix
     ./helpers-config.nix
-    ./options-vm.nix
     ./cmd-deploy.nix
     ./cmd-format.nix
     ./cmd-maintenance.nix

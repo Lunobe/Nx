@@ -47,7 +47,7 @@
     }
     {
       name = "vm";
-      desc = "manage ~/vmware and malware-lab VM backups on R2 (restic)";
+      desc = "manage ~/vmware backups on R2 (restic)";
     }
     {
       name = "push";
@@ -162,25 +162,20 @@ in {
       echo ""
       echo $sep
       echo ""
-      echo "  vm push [--no-lab]  snapshot ~/vmware and back it up to Cloudflare R2 (restic)"
+      echo "  vm push       snapshot ~/vmware and back it up to Cloudflare R2 (restic)"
       echo "                (unrelated to 'nx push', which commits/pushes this git repo)"
       echo "                1. check ~/vmware is a btrfs subvolume"
       echo "                2. load R2/restic credentials from agenix; initialize the"
       echo "                   restic repository if this is the first run"
-      echo "                3. with nx.vm.libvirtDomains set: require those libvirt VMs shut"
-      echo "                   off and collect their disks, UEFI NVRAM, TPM state and"
-      echo "                   snapshot metadata (all read from the domain definitions)"
-      echo "                4. take a read-only btrfs snapshot of ~/vmware, so the backup"
+      echo "                3. take a read-only btrfs snapshot of ~/vmware, so the backup"
       echo "                   sees a consistent point in time even while VMware is running"
-      echo "                5. restic backup the snapshot (and the lab files, as root) to R2"
-      echo "                   as ONE restic snapshot, tagged vm (and qemu when it holds"
-      echo "                   the lab); only changed data is uploaded, even within a single"
-      echo "                   .vmdk/.qcow2 file; then delete the btrfs snapshot"
-      echo "                --no-lab backs up ~/vmware only (e.g. a lab VM is running)"
+      echo "                4. restic backup the snapshot to R2 (only changed data is"
+      echo "                   uploaded, even within a single .vmdk file), then delete"
+      echo "                   the snapshot"
       echo ""
       echo $sep
       echo ""
-      echo "  vm pull [id] [--no-lab]  restore a backup from Cloudflare R2 (restic)"
+      echo "  vm pull [id]  restore a ~/vmware backup from Cloudflare R2 (restic)"
       echo "                1. load R2/restic credentials from agenix"
       echo "                2. clear any stale restic lock from a previously killed"
       echo "                   push/pull, and (if ~/vmware is a btrfs subvolume) take a"
@@ -191,23 +186,17 @@ in {
       echo "                   mirror (--delete): matching files are overwritten, and"
       echo "                   any file in ~/vmware not in the backup is deleted; asks"
       echo "                   to confirm first if ~/vmware already has files in it"
-      echo "                4. with nx.vm.libvirtDomains set: those VMs must be defined and"
-      echo "                   shut off (checked before anything is changed); their disks,"
-      echo "                   NVRAM, TPM state and libvirt snapshots in the same backup are"
-      echo "                   restored too, and overwrite what is on this machine"
       echo "                defaults to the latest backup; pass a snapshot ID (see"
-      echo "                'nx vm log') to restore an older one instead; --no-lab"
-      echo "                restores ~/vmware only"
+      echo "                'nx vm log') to restore an older one instead"
       echo ""
       echo $sep
       echo ""
-      echo "  vm log        list every backup in R2, with its date, ID and tags (each one"
-      echo "                holds ~/vmware, plus the malware-lab VMs when tagged qemu)"
+      echo "  vm log        list every ~/vmware backup in R2, with its date and ID"
       echo ""
       echo $sep
       echo ""
-      echo "  vm del <id>   permanently delete one backup (~/vmware and lab together) from"
-      echo "                R2 (asks to confirm) — find the ID with 'nx vm log' first"
+      echo "  vm del <id>   permanently delete one ~/vmware backup from R2 (asks to"
+      echo "                confirm) — find the ID with 'nx vm log' first"
       echo ""
       echo $sep
       echo ""
@@ -270,7 +259,7 @@ in {
       echo "  secret        edit an agenix-encrypted secret"
       echo "  search        [search|option|meta|lib] <name>"
       echo "  config        open every file in the flake's import graph in \$EDITOR"
-      echo "  vm push|pull|log|del  manage ~/vmware and malware-lab VM backups on Cloudflare R2 (restic)"
+      echo "  vm push|pull|log|del  manage ~/vmware backups on Cloudflare R2 (restic)"
       echo "  push          commit pending changes and push to the remote"
       echo "  nuke-history  squash all git history into one commit and force-push"
       echo "  doctor        nx format, update flake inputs, deploy, clean, push, in that order"
@@ -327,10 +316,10 @@ in {
     complete -c nx -n "__fish_seen_subcommand_from clean" -l all -d 'delete all old generations (full gc)'
     complete -c nx -n "__fish_seen_subcommand_from uninstall" -a "(__nx_list_packages)" -d 'installed package'
     complete -c nx -n "__fish_seen_subcommand_from secret" -a "(__nx_list_secrets)" -d 'secret'
-    complete -c nx -n "__fish_seen_subcommand_from vm" -a push -d 'snapshot ~/vmware (and the lab VMs) and back it up to R2'
-    complete -c nx -n "__fish_seen_subcommand_from vm" -a pull -d 'restore a backup from R2 (latest by default; ~/vmware and the lab VMs)'
-    complete -c nx -n "__fish_seen_subcommand_from vm" -a log -d 'list backups in R2 with dates/IDs/tags'
-    complete -c nx -n "__fish_seen_subcommand_from vm" -a del -d 'permanently delete one backup from R2'
+    complete -c nx -n "__fish_seen_subcommand_from vm" -a push -d 'snapshot ~/vmware and back it up to R2'
+    complete -c nx -n "__fish_seen_subcommand_from vm" -a pull -d 'restore a ~/vmware backup from R2 (latest by default)'
+    complete -c nx -n "__fish_seen_subcommand_from vm" -a log -d 'list ~/vmware backups in R2 with dates/IDs'
+    complete -c nx -n "__fish_seen_subcommand_from vm" -a del -d 'permanently delete one ~/vmware backup from R2'
     complete -c nx -n "__fish_seen_subcommand_from search" -a option -d 'inspect a NixOS option (e.g. nx search option programs.niri.enable)'
     complete -c nx -n "__fish_seen_subcommand_from search" -a search -d 'search nixpkgs packages'
     complete -c nx -n "__fish_seen_subcommand_from search" -a meta -d 'show a package full metadata (e.g. nx search meta niri)'
