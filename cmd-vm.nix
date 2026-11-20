@@ -64,7 +64,8 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
     # stop, and a disk image copied while running is not consistent) and defined
     __nx_vm_lab_check = ''
       for d in (__nx_vm_lab_domains)
-        set -l state (__nx_vm_virsh domstate $d 2>/dev/null | string trim)
+        # virsh prints a blank line after the state, so take only the non-blank line
+        set -l state (__nx_vm_virsh domstate $d 2>/dev/null | string match -r '\S.*' | string trim)
         if test -z "$state"
           echo "$d is not defined in libvirt — apply the NixOS config that defines it first." >&2
           return 1
@@ -133,7 +134,7 @@ ${lib.concatMapStrings (d: "      echo ${lib.escapeShellArg d}\n") labDomains}  
           __nx_vm_virsh snapshot-create $d $x --redefine >/dev/null
           or return 1
         end
-        set -l cur (string trim < $dump/$d/CURRENT 2>/dev/null)
+        set -l cur (string match -r '\S+' < $dump/$d/CURRENT 2>/dev/null)
         test -n "$cur"
         and __nx_vm_virsh snapshot-current $d --snapshotname $cur >/dev/null
       end
