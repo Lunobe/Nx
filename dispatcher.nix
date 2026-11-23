@@ -118,6 +118,8 @@ in {
       echo "                roll back — this deletes old generations and any store paths"
       echo "                no longer referenced by what's left, freeing disk space; you"
       echo "                lose the ability to roll back to whatever gets deleted"
+      echo "                afterwards the boot menu is refreshed so it no longer lists"
+      echo "                the deleted generations"
       echo "                --keep <n>  delete generations older than <n> days"
       echo "                --all       delete all old generations (full gc)"
       echo "                no flags defaults to --keep 7"

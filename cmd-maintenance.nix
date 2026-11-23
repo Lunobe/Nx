@@ -88,6 +88,15 @@
         return 1
       end
       __nx_ok
+
+      # gc leaves boot entries for deleted generations; they're rewritten only by switch-to-configuration
+      __nx_stage "Removing boot entries of deleted generations"
+      sudo /nix/var/nix/profiles/system/bin/switch-to-configuration boot
+      if test $status -ne 0
+        __nx_warn "Could not refresh the boot menu — run 'sudo /nix/var/nix/profiles/system/bin/switch-to-configuration boot' by hand."
+      else
+        __nx_ok
+      end
     '';
 
     __nx_cmd_push = ''
