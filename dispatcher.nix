@@ -47,7 +47,7 @@
     }
     {
       name = "vm";
-      desc = "manage ~/vmware backups on R2 (restic)";
+      desc = "manage libvirt VM backups on R2 (restic)";
     }
     {
       name = "push";
@@ -162,40 +162,37 @@ in {
       echo ""
       echo $sep
       echo ""
-      echo "  vm push       snapshot ~/vmware and back it up to Cloudflare R2 (restic)"
+      echo "  vm push       back up the libvirt VM state to Cloudflare R2 (restic)"
       echo "                (unrelated to 'nx push', which commits/pushes this git repo)"
-      echo "                1. check ~/vmware is a btrfs subvolume"
+      echo "                1. check every VM is shut off, with no managed-save image"
       echo "                2. load R2/restic credentials from agenix; initialize the"
       echo "                   restic repository if this is the first run"
-      echo "                3. take a read-only btrfs snapshot of ~/vmware, so the backup"
-      echo "                   sees a consistent point in time even while VMware is running"
-      echo "                4. restic backup the snapshot to R2 (only changed data is"
-      echo "                   uploaded, even within a single .vmdk file), then delete"
-      echo "                   the snapshot"
+      echo "                3. restic backup (sudo) of /var/lib/libvirt/{images,swtpm,"
+      echo "                   secrets,qemu/nvram,qemu/snapshot} and /var/lib/swtpm-localca,"
+      echo "                   skipping *.iso (only changed data is uploaded)"
+      echo "                VM/network definitions are not included — they come from"
+      echo "                modules/libvirt in the flake"
       echo ""
       echo $sep
       echo ""
-      echo "  vm pull [id]  restore a ~/vmware backup from Cloudflare R2 (restic)"
-      echo "                1. load R2/restic credentials from agenix"
-      echo "                2. clear any stale restic lock from a previously killed"
-      echo "                   push/pull, and (if ~/vmware is a btrfs subvolume) take a"
-      echo "                   read-only local snapshot at ~/.nx-vm-pull-snapshot as a"
-      echo "                   rollback point before restoring — delete it by hand once"
-      echo "                   you've checked the restore"
-      echo "                3. restic restore into ~/vmware (created if missing) as a"
-      echo "                   mirror (--delete): matching files are overwritten, and"
-      echo "                   any file in ~/vmware not in the backup is deleted; asks"
-      echo "                   to confirm first if ~/vmware already has files in it"
+      echo "  vm pull [id]  restore a libvirt VM backup from Cloudflare R2 (restic)"
+      echo "                1. load R2/restic credentials from agenix and clear any stale"
+      echo "                   restic lock from a previously killed push/pull"
+      echo "                2. check every VM is shut off; ask to confirm if disk images"
+      echo "                   already exist (they will be overwritten)"
+      echo "                3. stop libvirtd, restic restore into /var/lib/libvirt"
+      echo "                   (overwrite only, nothing is deleted), start libvirtd"
+      echo "                on a new machine run 'nx deploy' first so the VMs are defined"
       echo "                defaults to the latest backup; pass a snapshot ID (see"
       echo "                'nx vm log') to restore an older one instead"
       echo ""
       echo $sep
       echo ""
-      echo "  vm log        list every ~/vmware backup in R2, with its date and ID"
+      echo "  vm log        list every libvirt VM backup in R2, with its date and ID"
       echo ""
       echo $sep
       echo ""
-      echo "  vm del <id>   permanently delete one ~/vmware backup from R2 (asks to"
+      echo "  vm del <id>   permanently delete one libvirt VM backup from R2 (asks to"
       echo "                confirm) — find the ID with 'nx vm log' first"
       echo ""
       echo $sep
@@ -259,7 +256,7 @@ in {
       echo "  secret        edit an agenix-encrypted secret"
       echo "  search        [search|option|meta|lib] <name>"
       echo "  config        open every file in the flake's import graph in \$EDITOR"
-      echo "  vm push|pull|log|del  manage ~/vmware backups on Cloudflare R2 (restic)"
+      echo "  vm push|pull|log|del  manage libvirt VM backups on Cloudflare R2 (restic)"
       echo "  push          commit pending changes and push to the remote"
       echo "  nuke-history  squash all git history into one commit and force-push"
       echo "  doctor        nx format, update flake inputs, deploy, clean, push, in that order"
@@ -316,10 +313,10 @@ in {
     complete -c nx -n "__fish_seen_subcommand_from clean" -l all -d 'delete all old generations (full gc)'
     complete -c nx -n "__fish_seen_subcommand_from uninstall" -a "(__nx_list_packages)" -d 'installed package'
     complete -c nx -n "__fish_seen_subcommand_from secret" -a "(__nx_list_secrets)" -d 'secret'
-    complete -c nx -n "__fish_seen_subcommand_from vm" -a push -d 'snapshot ~/vmware and back it up to R2'
-    complete -c nx -n "__fish_seen_subcommand_from vm" -a pull -d 'restore a ~/vmware backup from R2 (latest by default)'
-    complete -c nx -n "__fish_seen_subcommand_from vm" -a log -d 'list ~/vmware backups in R2 with dates/IDs'
-    complete -c nx -n "__fish_seen_subcommand_from vm" -a del -d 'permanently delete one ~/vmware backup from R2'
+    complete -c nx -n "__fish_seen_subcommand_from vm" -a push -d 'back up libvirt VM state to R2'
+    complete -c nx -n "__fish_seen_subcommand_from vm" -a pull -d 'restore libvirt VM state from R2 (latest by default)'
+    complete -c nx -n "__fish_seen_subcommand_from vm" -a log -d 'list libvirt VM backups in R2 with dates/IDs'
+    complete -c nx -n "__fish_seen_subcommand_from vm" -a del -d 'permanently delete one libvirt VM backup from R2'
     complete -c nx -n "__fish_seen_subcommand_from search" -a option -d 'inspect a NixOS option (e.g. nx search option programs.niri.enable)'
     complete -c nx -n "__fish_seen_subcommand_from search" -a search -d 'search nixpkgs packages'
     complete -c nx -n "__fish_seen_subcommand_from search" -a meta -d 'show a package full metadata (e.g. nx search meta niri)'

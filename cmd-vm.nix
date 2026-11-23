@@ -1,8 +1,25 @@
-{pkgs, ...}: {
-  # -- nx: vm — push/pull/log/del the ~/vmware VM library on Cloudflare R2
-  # via restic. Kept separate — unlike everything else nx touches, this
-  # doesn't read/write the flake repo, just moves data between ~/vmware
-  # and R2 using the r2Credentials/resticPassword agenix secrets.
+{pkgs, ...}: let
+  restic = "${pkgs.restic}/bin/restic";
+  virsh = "${pkgs.libvirt}/bin/virsh -c qemu:///system";
+  vmTag = "libvirt";
+  vmHost = "vm-library";
+  libvirtPaths = [
+    "/var/lib/libvirt/images"
+    "/var/lib/libvirt/qemu/nvram"
+    "/var/lib/libvirt/qemu/snapshot"
+    "/var/lib/libvirt/swtpm"
+    "/var/lib/libvirt/secrets"
+    "/var/lib/swtpm-localca"
+  ];
+  pathList = builtins.concatStringsSep " " (map (p: ''"${p}"'') libvirtPaths);
+  sudoKeepEnv = "AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION,RESTIC_REPOSITORY,RESTIC_PASSWORD_FILE";
+in {
+  # -- nx: vm — push/pull/log/del the libvirt VM state (disks, NVRAM, TPM,
+  # snapshot metadata, secrets) on Cloudflare R2 via restic. VM and network
+  # definitions are not backed up: they come from the flake (modules/libvirt).
+  # Kept separate — unlike everything else nx touches, this doesn't
+  # read/write the flake repo; it uses the r2Credentials/resticPassword
+  # agenix secrets.
   #
   # The R2/restic env vars are loaded inline in each of push/pull/log/del
   # below, not factored into a shared helper — a helper's `set -lx` does
@@ -37,6 +54,38 @@
       return 1
     '';
 
+    # every libvirt domain must be shut off with no managed-save image: a disk
+    # copied while running is inconsistent, and a managed save keeps RAM state
+    # outside the backed-up paths
+    __nx_vm_require_stopped = ''
+      if not ${virsh} version >/dev/null 2>&1
+        __nx_fail "Could not reach libvirt (qemu:///system) — is libvirtd running?"
+        return 1
+      end
+      for d in (${virsh} list --all --name | string match -v "")
+        set -l state (${virsh} domstate $d | string match -v "" | string trim)
+        if test "$state" != "shut off"
+          __nx_fail "$d is $state — shut it down first."
+          return 1
+        end
+        if ${virsh} dominfo $d | string match -rq 'Managed save:\s+yes'
+          __nx_fail "$d has a managed-save image — start and shut it down properly (or run 'virsh managedsave-remove $d') first."
+          return 1
+        end
+      end
+    '';
+
+    # backup paths that exist on this machine, one per line
+    __nx_vm_paths = ''
+      for p in ${pathList}
+        if test -e $p
+          echo $p
+        else
+          __nx_warn "$p does not exist — skipping it." >&2
+        end
+      end
+    '';
+
     __nx_cmd_vm = ''
       switch "$argv[2]"
         case push
@@ -54,17 +103,9 @@
     '';
 
     __nx_cmd_vm_push = ''
-      set -l vmware_dir $HOME/vmware
-      set -l snapshot_dir $HOME/.nx-vm-snapshot
-
-      __nx_stage "Checking ~/vmware is a btrfs subvolume"
-      # needs sudo — querying subvolume info is a privileged btrfs ioctl,
-      # confirmed by 'ERROR: Could not search B-tree: Operation not
-      # permitted' when tried as a plain user, even on an owned subvolume
-      if not sudo btrfs subvolume show $vmware_dir >/dev/null 2>&1
-        __nx_fail "$vmware_dir is not a btrfs subvolume — nx vm push snapshots it read-only before backing up. Check the fileSystems entry for $vmware_dir in configuration.nix (subvol=@vmware)."
-        return 1
-      end
+      __nx_stage "Checking all VMs are shut off"
+      __nx_vm_require_stopped
+      or return 1
       __nx_ok
 
       set -l cred_file /run/agenix/r2Credentials
@@ -88,51 +129,31 @@
       set -lx RESTIC_PASSWORD_FILE $pw_file
 
       __nx_stage "Checking the restic repository"
-      ${pkgs.restic}/bin/restic snapshots >/dev/null 2>&1
-      or ${pkgs.restic}/bin/restic init
+      ${restic} snapshots >/dev/null 2>&1
+      or ${restic} init
       if test $status -ne 0
         __nx_fail "Could not reach or initialize the restic repository at $RESTIC_REPOSITORY — check network access and the R2 credentials."
         return 1
       end
       __nx_ok
 
-      if test -e $snapshot_dir
-        __nx_warn "Leftover snapshot at $snapshot_dir from a previous run — removing it first."
-        sudo btrfs subvolume delete $snapshot_dir
-      end
-
-      __nx_stage "Snapshotting ~/vmware (read-only, for a consistent backup)"
-      sudo btrfs subvolume snapshot -r $vmware_dir $snapshot_dir
-      if test $status -ne 0
-        __nx_fail "Snapshot failed — check free space and that $vmware_dir is really a btrfs subvolume."
+      set -l paths (__nx_vm_paths)
+      if test (count $paths) -eq 0
+        __nx_fail "None of the libvirt state directories exist on this machine — nothing to back up."
         return 1
       end
-      __nx_ok
 
-      __nx_stage "Backing up to R2 (only changed data is uploaded after the first run)"
-      ${pkgs.restic}/bin/restic backup $snapshot_dir --host vm-library --tag vm
-      set -l backup_status $status
-      if test $backup_status -eq 0
-        __nx_ok
-      end
-
-      __nx_stage "Removing the snapshot"
-      sudo btrfs subvolume delete $snapshot_dir
+      # root-only directories, so restic runs under sudo; ISOs are re-downloadable
+      __nx_stage "Backing up libvirt state to R2 (only changed data is uploaded after the first run)"
+      sudo --preserve-env=${sudoKeepEnv} ${restic} backup $paths --exclude '*.iso' --host ${vmHost} --tag ${vmTag}
       if test $status -ne 0
-        __nx_warn "Could not remove $snapshot_dir — remove it by hand later with 'sudo btrfs subvolume delete $snapshot_dir'."
-      else
-        __nx_ok
-      end
-
-      if test $backup_status -ne 0
         __nx_fail "restic backup failed — check network access and the R2 credentials (see restic's own output above)."
         return 1
       end
+      __nx_ok
     '';
 
     __nx_cmd_vm_pull = ''
-      set -l vmware_dir $HOME/vmware
-      set -l snapshot_dir $HOME/.nx-vm-snapshot
       set -l target_snapshot latest
       if test -n "$argv[3]"
         set target_snapshot "$argv[3]"
@@ -153,12 +174,13 @@
         __nx_fail "$cred_file is missing one or more of R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_ENDPOINT/R2_BUCKET."
         return 1
       end
+      # required by Cloudflare R2's S3-compatible API
       set -lx AWS_DEFAULT_REGION auto
       set -lx RESTIC_REPOSITORY "s3:$r2_endpoint/$r2_bucket"
       set -lx RESTIC_PASSWORD_FILE $pw_file
 
       __nx_stage "Checking the restic repository"
-      ${pkgs.restic}/bin/restic snapshots >/dev/null 2>&1
+      ${restic} snapshots >/dev/null 2>&1
       if test $status -ne 0
         __nx_fail "Could not reach the restic repository at $RESTIC_REPOSITORY, or nothing has been pushed yet — check network access and the R2 credentials, or run 'nx vm push' first on the machine that has the VMs."
         return 1
@@ -167,22 +189,18 @@
 
       # best-effort cleanup of a stale lock left by a previously killed
       # push/pull — restic unlock is a no-op if there's nothing to unlock
-      ${pkgs.restic}/bin/restic unlock >/dev/null 2>&1
+      ${restic} unlock >/dev/null 2>&1
 
-      set -l pull_backup_dir $HOME/.nx-vm-pull-snapshot
-      if test -e $pull_backup_dir
-        sudo btrfs subvolume delete $pull_backup_dir >/dev/null 2>&1
-      end
-      if sudo btrfs subvolume show $vmware_dir >/dev/null 2>&1
-        sudo btrfs subvolume snapshot -r $vmware_dir $pull_backup_dir
-        __nx_ok "local rollback snapshot saved at $pull_backup_dir — delete it by hand once you've checked the restore"
-      else
-        __nx_warn "$vmware_dir is not a btrfs subvolume — no local rollback snapshot will be taken before this restore."
+      if ${virsh} version >/dev/null 2>&1
+        __nx_stage "Checking all VMs are shut off"
+        __nx_vm_require_stopped
+        or return 1
+        __nx_ok
       end
 
-      set -l existing $vmware_dir/*
+      set -l existing (sudo find /var/lib/libvirt/images -maxdepth 1 -name '*.qcow2' 2>/dev/null)
       if test (count $existing) -gt 0
-        __nx_warn "$vmware_dir is not empty — this is a mirror restore: files will be overwritten to match the backup, and any file in $vmware_dir that isn't in it will be DELETED."
+        __nx_warn "libvirt disk images already exist on this machine — restoring will OVERWRITE them with the backup's versions (files not in the backup are left alone)."
         __nx_confirm "Continue?"
         or begin
           echo "Aborted."
@@ -190,16 +208,28 @@
         end
       end
 
-      __nx_stage "Restoring $target_snapshot from R2 into ~/vmware (mirror — extra local files are deleted)"
-      mkdir -p $vmware_dir
+      # libvirtd caches nvram/snapshot/TPM state, so it must be down while those files are replaced
+      set -l units libvirtd.service libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket
+      __nx_stage "Stopping libvirtd"
+      sudo systemctl stop $units
+      __nx_ok
+
+      __nx_stage "Restoring $target_snapshot from R2 into /var/lib/libvirt (existing files overwritten, nothing deleted)"
+      set -l includes
+      for p in ${pathList}
+        set -a includes --include $p
+      end
+      set -l selector
       if test "$target_snapshot" = latest
         # --host/--tag pick the right snapshot out of the repo for "latest" —
         # irrelevant (and not applied) once you already have one specific ID
-        ${pkgs.restic}/bin/restic restore "latest:$snapshot_dir" --target $vmware_dir --delete --host vm-library --tag vm
-      else
-        ${pkgs.restic}/bin/restic restore "$target_snapshot:$snapshot_dir" --target $vmware_dir --delete
+        set selector --host ${vmHost} --tag ${vmTag}
       end
-      if test $status -ne 0
+      sudo --preserve-env=${sudoKeepEnv} ${restic} restore $selector $target_snapshot --target / --sparse $includes
+      set -l restore_status $status
+
+      sudo systemctl start libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket libvirtd.service
+      if test $restore_status -ne 0
         __nx_fail "restic restore failed — check the ID is correct (run 'nx vm log' to list available backups), and that network access and the R2 credentials are OK (see restic's own output above)."
         return 1
       end
@@ -226,8 +256,8 @@
       set -lx RESTIC_REPOSITORY "s3:$r2_endpoint/$r2_bucket"
       set -lx RESTIC_PASSWORD_FILE $pw_file
 
-      __nx_stage "Backup history for ~/vmware in R2"
-      set -l log_output (${pkgs.restic}/bin/restic snapshots --host vm-library --tag vm 2>&1)
+      __nx_stage "Backup history for libvirt VMs in R2"
+      set -l log_output (${restic} snapshots --host ${vmHost} --tag ${vmTag} 2>&1)
       set -l log_status $status
       # restic's own exit code for "repository does not exist yet" — the
       # expected state before the first ever 'nx vm push', not an error
@@ -270,7 +300,7 @@
       set -lx RESTIC_PASSWORD_FILE $pw_file
 
       __nx_stage "Looking up $id"
-      set -l lookup_output (${pkgs.restic}/bin/restic snapshots $id 2>&1)
+      set -l lookup_output (${restic} snapshots $id 2>&1)
       if test $status -ne 0
         __nx_fail "No snapshot found matching '$id' — run 'nx vm log' to see available IDs."
         return 1
@@ -284,7 +314,7 @@
       end
 
       __nx_stage "Deleting $id"
-      ${pkgs.restic}/bin/restic forget $id --prune
+      ${restic} forget $id --prune
       if test $status -ne 0
         __nx_fail "Deletion failed — check network access and the R2 credentials (see restic's own output above)."
         return 1
