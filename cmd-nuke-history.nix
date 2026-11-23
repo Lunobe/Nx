@@ -11,7 +11,7 @@
     __nx_cmd_nuke_history = ''
       __nx_stage "Nuking git history"
       echo "WARNING: this permanently rewrites ALL git history in ${repoDir}."
-      echo "Every file will be committed fresh as a single \"squashed into single commit\","
+      echo "Every file will be committed fresh as a single \"nuked commit history\","
       echo "which is then force-pushed, overwriting the remote history too."
       echo "A full backup of the current history is saved locally first (see"
       echo "below), but restoring from it is a manual process, not an undo button."
@@ -66,7 +66,7 @@
           git -C ${repoDir} checkout --orphan __nx_nuke_tmp
           and __nx_untrack_ignored
           and git -C ${repoDir} add -A
-          and git -C ${repoDir} commit -m "squashed into single commit"
+          and git -C ${repoDir} commit -m "nuked commit history"
           and git -C ${repoDir} branch -D $branch
           and git -C ${repoDir} branch -m $branch
           and __nx_stage "Force-pushing rewritten history"

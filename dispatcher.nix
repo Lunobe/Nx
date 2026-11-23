@@ -206,7 +206,7 @@ in {
       echo ""
       echo $sep
       echo ""
-      echo "  nuke-history  squash all git history into one \"squashed into single commit\" and"
+      echo "  nuke-history  squash all git history into one \"nuked commit history\" and"
       echo "                force-push — rewrites remote history; a full backup is"
       echo "                saved locally first, but restoring from it is manual"
       echo "                1. warn about the consequences; show which remote will be"
